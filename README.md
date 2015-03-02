@@ -1,2 +1,2 @@
 # deep-recurrent-attentive-writer
-Deep Recurrent Attentive Writer
+Implementation of Google DeepMind's Deep Recurrent Attentive Writer
