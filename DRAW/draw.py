@@ -1,10 +1,4 @@
 import cPickle
-import gzip
-import os
-import sys
-import time
-import glob
-
 import numpy
 try:
     import pylab
@@ -22,87 +16,10 @@ from theano.tensor.shared_randomstreams import RandomStreams
 
 from adam import ADAM
 from lstm import LSTM
+from logistic_sgd import load_data
 
 numpy.random.seed(0xbeef)
 rng = RandomStreams(seed=numpy.random.randint(1 << 30))
-
-def load_data(dataset):
-    ''' Loads the dataset
-
-    :type dataset: string
-    :param dataset: the path to the dataset (here MNIST)
-    '''
-
-    #############
-    # LOAD DATA #
-    #############
-
-    # Download the MNIST dataset if it is not present
-    data_dir, data_file = os.path.split(dataset)
-    if data_dir == "" and not os.path.isfile(dataset):
-        # Check if dataset is in the data directory.
-        new_path = os.path.join(
-            os.path.split(__file__)[0],
-            "..",
-            "data",
-            dataset
-        )
-        if os.path.isfile(new_path) or data_file == 'mnist.pkl.gz':
-            dataset = new_path
-
-    if (not os.path.isfile(dataset)) and data_file == 'mnist.pkl.gz':
-        import urllib
-        origin = (
-            'http://www.iro.umontreal.ca/~lisa/deep/data/mnist/mnist.pkl.gz'
-        )
-        print 'Downloading data from %s' % origin
-        urllib.urlretrieve(origin, dataset)
-
-    print '... loading data'
-
-    # Load the dataset
-    f = gzip.open(dataset, 'rb')
-    train_set, valid_set, test_set = cPickle.load(f)
-    f.close()
-    #train_set, valid_set, test_set format: tuple(input, target)
-    #input is an numpy.ndarray of 2 dimensions (a matrix)
-    #witch row's correspond to an example. target is a
-    #numpy.ndarray of 1 dimensions (vector)) that have the same length as
-    #the number of rows in the input. It should give the target
-    #target to the example with the same index in the input.
-
-    def shared_dataset(data_xy, borrow=True):
-        """ Function that loads the dataset into shared variables
-
-        The reason we store our dataset in shared variables is to allow
-        Theano to copy it into the GPU memory (when code is run on GPU).
-        Since copying data into the GPU is slow, copying a minibatch everytime
-        is needed (the default behaviour if the data is not in a shared
-        variable) would lead to a large decrease in performance.
-        """
-        data_x, data_y = data_xy
-        shared_x = theano.shared(numpy.asarray(data_x,
-                                               dtype=theano.config.floatX),
-                                 borrow=borrow)
-        shared_y = theano.shared(numpy.asarray(data_y,
-                                               dtype=theano.config.floatX),
-                                 borrow=borrow)
-        # When storing data on the GPU it has to be stored as floats
-        # therefore we will store the labels as ``floatX`` as well
-        # (``shared_y`` does exactly that). But during our computations
-        # we need them as ints (we use labels as index, and if they are
-        # floats it doesn't make sense) therefore instead of returning
-        # ``shared_y`` we will have to cast it to int. This little hack
-        # lets ous get around this issue
-        return shared_x, T.cast(shared_y, 'int32')
-
-    test_set_x, test_set_y = shared_dataset(test_set)
-    valid_set_x, valid_set_y = shared_dataset(valid_set)
-    train_set_x, train_set_y = shared_dataset(train_set)
-
-    rval = [(train_set_x, train_set_y), (valid_set_x, valid_set_y),
-            (test_set_x, test_set_y)]
-    return rval
 
 class ReadHead(object):
 
@@ -209,14 +126,6 @@ class DRAW(object):
       c_t = ctm1 + self.writeHead.write(h_t_dec)
       return [c_t,s_t_enc,h_t_enc,s_t_dec,h_t_dec,ztm1+[z_t]]
 
-    '''results, updates = theano.scan(fn = autoEncode, 
-      outputs_info = [vec2Matrix(self.c0),vec2Matrix(self.rnn_enc.s0),
-          vec2Matrix(self.rnn_enc.h0),vec2Matrix(self.rnn_dec.s0),
-          vec2Matrix(self.rnn_dec.h0),numpy.zeros((batch_size,n_hidden_enc),
-                                dtype=theano.config.floatX)], 
-      sequences = self.randSeq,
-      non_sequences = input, n_steps = n_steps)'''
-
     c_t,s_t_enc,h_t_enc,s_t_dec,h_t_dec,z_t = [vec2Matrix(self.c0),vec2Matrix(self.rnn_enc.s0),
           vec2Matrix(self.rnn_enc.h0),vec2Matrix(self.rnn_dec.s0),
           vec2Matrix(self.rnn_dec.h0),[]]
@@ -241,7 +150,7 @@ def test_draw():
 
   batch_size = 100
 
-  dataset = '../DeepLearningTutorials/data/mnist.pkl.gz'
+  dataset = '../data/mnist.pkl.gz'
 
   datasets = load_data(dataset)
 
@@ -254,18 +163,17 @@ def test_draw():
   n_valid_batches = valid_set_x.get_value(borrow=True).shape[0] / batch_size
   n_test_batches = test_set_x.get_value(borrow=True).shape[0] / batch_size
 
-  #test_batch = test_set_x.get_value()[index * batch_size:(index + 1) * batch_size]
-
-  train_set = train_set_x.get_value(borrow=True)
-  n_train_batches = train_set.shape[0] / batch_size
+  #train_set = train_set_x.get_value(borrow=True)
+  #n_train_batches = train_set.shape[0] / batch_size
   test_set = test_set_x.get_value(borrow=True)
 
+  index = T.lscalar('index')
   x = T.dmatrix('x')
 
   draw = DRAW(rng=rng,input=x,
     imgX=28,imgY=28,
     n_hidden_enc=28*28,n_hidden_dec=28*28,
-    n_steps=2,batch_size=batch_size)
+    n_steps=1,batch_size=batch_size)
 
   print("... initialized graph")
   
@@ -277,37 +185,52 @@ def test_draw():
 
   updates = adam.updates
 
-  trainModel = theano.function(inputs=[x],outputs = draw.test,updates = updates)
+  trainModel = theano.function(inputs=[index],outputs = draw.loss,
+    updates = updates,givens={x: train_set_x[index * batch_size: (index + 1) * batch_size]})
 
-  print("functions compiled")
+  print("...trainModel compiled")
+
+  validateModel = theano.function(inputs=[index],outputs = draw.loss,
+    givens={x: valid_set_x[index * batch_size: (index + 1) * batch_size]})
+
+  print("...validateModel compiled")
 
   epoch = 0
-  n_epochs = 10
+  min_epochs = 5
+  max_epochs = 20
   done_looping = False
-  best_cost = 1e10
-  patience = 350
+  best_loss = 1e10
+  patience = 10
   n_steps_left = patience
 
-  while (epoch < n_epochs) and (not done_looping):
+  while (epoch < max_epochs) and (not done_looping):
     epoch = epoch + 1
     for index in xrange(n_train_batches):
 
-      cost = trainModel(train_set[index * batch_size:(index + 1) * batch_size])
+      cost = trainModel(index)
       iter = (epoch - 1) * n_train_batches + index
+
+      valid_loss = validateModel(index%n_valid_batches)
 
       print(
           'epoch %i, minibatch %i/%i, training set cost %f' %
           (epoch, index + 1, n_train_batches, cost)
       )
 
-      if cost < best_cost:
-          print("new best")
-          n_steps_left = patience
-          best_cost = cost
+      if(index%(n_train_batches/10) == 0):
+        valid_losses = [validateModel(i) for i in numpy.random.randint(n_valid_batches,size=n_valid_batches/5)]
+        avg_valid_loss = numpy.mean(valid_losses)
 
-      n_steps_left -= 1
-      if n_steps_left < 0:
-        done_looping = True
+        print("validation loss %f" % (avg_valid_loss))
+
+        if avg_valid_loss < best_loss:
+            print("new best")
+            n_steps_left = patience
+            best_loss = avg_valid_loss
+
+        n_steps_left -= 1
+        if n_steps_left < 0 and epoch > min_epochs:
+          done_looping = True
 
   doOnce = theano.function(inputs=[x],outputs = [draw.generated_x,draw.mean,draw.var])
 
@@ -325,11 +248,15 @@ def test_draw():
 
   for i,img in enumerate(output[2][0:5]):
     pylab.subplot(4, 5, 16+i); pylab.axis('off'); pylab.imshow(img.reshape(28,28))
-    print (img.min())
-    print (img.max())
-
 
   pylab.show()
+
+  param_file = open('../data/params.pk','wb')
+
+  for param in draw.params:
+    cPickle.dump(param.get_value(borrow=True),param_file,-1)
+
+  param_file.close()
   
 
 if __name__ == '__main__':
