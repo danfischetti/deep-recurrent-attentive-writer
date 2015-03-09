@@ -47,7 +47,7 @@ class WriteHead(object):
 
 class RandomVariable(object):
     
-    def __init__(self, srng, n):
+    def __init__(self, srng, n, sigmoid_mean=False):
         ''' 
         n:: dimension of input
         '''
@@ -62,29 +62,30 @@ class RandomVariable(object):
                                 (n, n))
                                 .astype(theano.config.floatX))
         self.n = n
-        self.params = [self.w_mean,self.w_var]
+        self.sigmoid_mean = sigmoid_mean
+        if(self.sigmoid_mean):
+          self.params = [self.w_var]
+        else:
+          self.params = [self.w_mean,self.w_var]
         #self.params = [self.w_mean]
 
     def conditional_sample(self,input,epsilon):
-      return T.dot(input,self.w_mean)+T.sqrt(T.exp(T.dot(input,self.w_var)))*epsilon
+      if(self.sigmoid_mean):
+        return T.nnet.sigmoid(input)+T.sqrt(T.exp(T.dot(input,self.w_var)))*epsilon
+      else:
+        return T.dot(input,self.w_mean)+T.sqrt(T.exp(T.dot(input,self.w_var)))*epsilon
 
     def latent_loss(self,input):
       var = T.exp(T.dot(input,self.w_var))
       return 0.5*T.sum(T.dot(input,self.w_mean)**2 + var - T.log(var),axis = [0,2])
 
-    def conditional_prob(self,outcome,condition):
-      diff = (T.dot(condition,self.w_mean)-outcome)
-      var = T.exp(T.dot(condition,self.w_var))
-      #ignoring some multiplicative constants, disappear in derivative of log anyway
-      #return (1/(1e-200+T.sqrt(T.prod(1.5*var,axis=1))))*T.exp(-0.5*T.sum(diff*(1/var)*diff,axis=1))
-      return T.prod((1/(T.sqrt(2*numpy.pi*var)))*T.exp(-0.5*diff*(1/var)*diff),axis=1)
-
     def log_conditional_prob(self,outcome,condition):
-      diff = (T.dot(condition,self.w_mean)-outcome)
-      var = T.exp(T.dot(condition,self.w_var))
-      #ignoring some multiplicative constants, disappear in derivative of log anyway
-      #return (1/(1e-200+T.sqrt(T.prod(1.5*var,axis=1))))*T.exp(-0.5*T.sum(diff*(1/var)*diff,axis=1))
-      return T.sum(T.log((1/(T.sqrt(2*numpy.pi*var)))*T.exp(-0.5*diff*(1/var)*diff)),axis=1)
+      if(self.sigmoid_mean):
+        diff = T.nnet.sigmoid(condition)-outcome
+      else:
+        diff = (T.dot(condition,self.w_mean)-outcome)
+      var = .005+T.exp(T.dot(condition,self.w_var))
+      return T.sum(T.log((1/(T.sqrt(2*numpy.pi*var)))*(1e-10+T.exp(-0.5*diff*(1/var)*diff))),axis=1)
 
 
 class DRAW(object):
@@ -103,7 +104,7 @@ class DRAW(object):
     self.Z = RandomVariable(rng,n_hidden_enc)
     self.readHead = ReadHead(n_hidden_enc)
     self.writeHead = WriteHead(imgX,imgY,n_hidden_dec)
-    self.X = RandomVariable(rng,imgX*imgY)
+    self.X = RandomVariable(rng,imgX*imgY,sigmoid_mean=True)
     self.randSeq = rng.normal((n_steps,batch_size,n_hidden_enc))
 
     self.params = [self.c0] + self.readHead.params + self.rnn_enc.params + self.Z.params + self.rnn_dec.params + self.X.params + self.writeHead.params
@@ -141,6 +142,8 @@ class DRAW(object):
     self.lossX = T.sum(-self.X.log_conditional_prob(input,self.cT))
     self.lossZ = T.sum(T.sum(self.Z.latent_loss(self.zT)) - n_steps/2)
     self.loss = (self.lossX+self.lossZ)/batch_size
+    #diff = (T.dot(self.cT,self.X.w_mean)-input)
+    #var = T.exp(T.dot(self.cT,self.X.w_var))
     self.test = self.loss
     self.generated_x = self.X.conditional_sample(self.cT,rng.normal((batch_size,imgX*imgY)))
     self.mean = T.dot(self.cT,self.X.w_mean)
@@ -168,12 +171,12 @@ def test_draw():
   test_set = test_set_x.get_value(borrow=True)
 
   index = T.lscalar('index')
-  x = T.dmatrix('x')
+  x = T.matrix('x')
 
   draw = DRAW(rng=rng,input=x,
     imgX=28,imgY=28,
     n_hidden_enc=28*28,n_hidden_dec=28*28,
-    n_steps=1,batch_size=batch_size)
+    n_steps=5,batch_size=batch_size)
 
   print("... initialized graph")
   
@@ -185,7 +188,7 @@ def test_draw():
 
   updates = adam.updates
 
-  trainModel = theano.function(inputs=[index],outputs = draw.loss,
+  trainModel = theano.function(inputs=[index],outputs = draw.test,
     updates = updates,givens={x: train_set_x[index * batch_size: (index + 1) * batch_size]})
 
   print("...trainModel compiled")
@@ -197,7 +200,7 @@ def test_draw():
 
   epoch = 0
   min_epochs = 5
-  max_epochs = 20
+  max_epochs = 30
   done_looping = False
   best_loss = 1e10
   patience = 10
@@ -216,9 +219,10 @@ def test_draw():
           'epoch %i, minibatch %i/%i, training set cost %f' %
           (epoch, index + 1, n_train_batches, cost)
       )
+      #print(cost)
 
       if(index%(n_train_batches/10) == 0):
-        valid_losses = [validateModel(i) for i in numpy.random.randint(n_valid_batches,size=n_valid_batches/5)]
+        valid_losses = [validateModel(i) for i in xrange(n_valid_batches)]
         avg_valid_loss = numpy.mean(valid_losses)
 
         print("validation loss %f" % (avg_valid_loss))
@@ -237,17 +241,11 @@ def test_draw():
   output = doOnce(test_set[0:100])
 
   pylab.gray()
-  for i,img in enumerate(test_set[0:5]):
-    pylab.subplot(4, 5, 1+i); pylab.axis('off'); pylab.imshow(img.reshape(28,28),vmin=0, vmax=1)
+  for i,img in enumerate(test_set[0:100]):
+    pylab.subplot(10, 20, 1+i); pylab.axis('off'); pylab.imshow(img.reshape(28,28),vmin=0, vmax=1)
 
-  for i,img in enumerate(output[0][0:5]):
-    pylab.subplot(4, 5, 6+i); pylab.axis('off'); pylab.imshow(img.reshape(28,28),vmin=0, vmax=1)
-
-  for i,img in enumerate(output[1][0:5]):
-    pylab.subplot(4, 5, 11+i); pylab.axis('off'); pylab.imshow(img.reshape(28,28))
-
-  for i,img in enumerate(output[2][0:5]):
-    pylab.subplot(4, 5, 16+i); pylab.axis('off'); pylab.imshow(img.reshape(28,28))
+  for i,img in enumerate(output[0]):
+    pylab.subplot(10, 20, 101+i); pylab.axis('off'); pylab.imshow(img.reshape(28,28),vmin=0, vmax=1)
 
   pylab.show()
 

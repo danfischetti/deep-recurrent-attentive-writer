@@ -12,7 +12,7 @@ class ADAM (object):
 			value = numpy.zeros(param.get_value().shape,dtype=theano.config.floatX)) for param in params]
 		self.v = [theano.shared(name = 'v',
 			value = numpy.zeros(param.get_value().shape,dtype=theano.config.floatX)) for param in params]
-		self.t = theano.shared(name = 't',value = 1)
+		self.t = theano.shared(name = 't',value = numpy.asarray(1).astype(theano.config.floatX))
 
 		self.updates = [(self.t,self.t+1)]
 		for param,gparam,m,v in zip(params,gparams,self.m,self.v):
