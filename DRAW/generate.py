@@ -10,7 +10,7 @@ def test_gen():
     imgX=28,imgY=28,
     n_hidden_enc=256,n_hidden_dec=256,
     n_z=100,batch_size=100,
-    n_steps=1)
+    n_steps=26)
 
 	f = open('../data/params.pk','rb')
 
@@ -21,6 +21,8 @@ def test_gen():
 	generate = theano.function(inputs = [],outputs = draw.generated_x2)
 
 	pylab.gray()
+
+	generate()
 
 	for i,img in enumerate(generate()):
 		pylab.subplot(10, 10, 1+i); pylab.axis('off'); pylab.imshow(img.reshape(28,28),vmin=0, vmax=1)
