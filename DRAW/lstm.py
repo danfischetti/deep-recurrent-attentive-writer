@@ -75,9 +75,9 @@ class LSTM(object):
                                 + T.dot(y_tm1, self.wh_out) + self.b_out)
            forget_t = T.nnet.sigmoid(T.dot(x_t, self.wx_forget)
                                 + T.dot(y_tm1, self.wh_forget) + self.b_forget)
-           g_t = T.nnet.sigmoid(T.dot(x_t, self.wx)
+           g_t = T.tanh(T.dot(x_t, self.wx)
                                 + T.dot(y_tm1, self.wh) + self.bh)
            s_t = s_tm1*forget_t + g_t*in_t
-           h_t = T.nnet.sigmoid(s_t)
+           h_t = T.tanh(s_t)
            y_t = h_t*out_t
            return [s_t, y_t]
